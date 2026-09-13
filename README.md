@@ -1,6 +1,6 @@
 # Entra Cloud Conversion
 
-Paste one email or a list into the popup, click **Start**, and sign in to Microsoft
+Choose **Convert** or **Restore**, paste one email or a list into the popup, click **Start**, and sign in to Microsoft
 Graph. A result window shows what happened to each account, with totals for
 successful conversions, skipped accounts, failures and unverified outcomes.
 
@@ -32,7 +32,8 @@ Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Repository PSG
 & ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/xnostra/Entra-Cloud-Conversion/main/Convert-EntraUserToCloud.ps1')))
 ```
 
-1. Paste one email or multiple emails into the large box. Use one per line,
+1. Choose **Convert - manage in cloud** or **Restore - manage in local AD**.
+   Paste one email or multiple emails into the large box. Use one per line,
    spaces, commas or semicolons.
 2. Click **Start**. **Cancel**, Escape, or closing the input window exits without changes.
 3. Sign in when prompted. Progress appears in PowerShell while accounts are processed.
@@ -120,6 +121,58 @@ download instead of this public raw URL.
 - Unverified: PATCH attempted but its outcome could not be confirmed. This can
   include server rejection, network failure or delayed readback. Read the detail;
   recheck the account before retrying. No rollback is attempted.
+- PendingSync: Restore set and verified `isCloudManaged=false`, but AD takeover
+  has not completed. Run a sync cycle on the working sync server and rerun Restore
+  to verify. An account already at false without active sync is skipped with an
+  explanation, because it may also be a cloud-native user.
+
+## Restore to local AD
+
+Restore reverses the per-user SOA transfer. It does not recover deleted accounts,
+recreate local AD accounts, or undo changes made to passwords/profile values while
+cloud-managed. It never clears immutable IDs or resets passwords.
+
+Before clicking Start for Restore, check that the original matching AD accounts
+exist, are in sync scope, and the sync server is working. Review and resolve cloud
+references first, including SOA-transferred groups and their access-package
+dependencies as required by Microsoft's rollback guide. The tool asks you to
+confirm these external prerequisites; it cannot inspect your local AD or prove
+that all cloud dependencies have been resolved.
+
+Restore additionally requests `OnPremDirectorySynchronization.Read.All` to read
+the sync protection configuration. Microsoft requires **Global Administrator**
+for this read. Convert retains its original permissions and supported role.
+
+An administrator must prepare a planned rollback window:
+
+1. Review [Microsoft's rollback instructions](https://learn.microsoft.com/en-us/entra/identity/hybrid/how-to-user-source-of-authority-configure#roll-back-soa-update).
+2. Temporarily set `features.blockCloudObjectTakeoverThroughHardMatchEnabled`
+   to `false` on the correct `/directory/onPremisesSynchronization/{id}` object.
+   This is a **tenant-wide** protection, so keep this window controlled and brief.
+   Modifying it requires `OnPremDirectorySynchronization.ReadWrite.All` and
+   Global Administrator. The tool intentionally requests read-only access to it
+   and blocks Restore if it is still enabled or cannot be verified.
+3. Use **Restore** for the intended users. The tool PATCHes only their
+   `onPremisesSyncBehavior` with `{"isCloudManaged":false}` and reads it back.
+4. Run the sync cycle on the working sync server. A dead server cannot complete
+   Restore. Rerun Restore to check the users: success requires both
+   `isCloudManaged=false` and `onPremisesSyncEnabled=true`.
+5. Once all intended users have completed takeover, **re-enable**
+   `blockCloudObjectTakeoverThroughHardMatchEnabled` and verify it is `true`.
+   This remains the administrator's responsibility, even if a run fails or closes.
+
+The tool does not weaken or change tenant-wide protection, delete group
+memberships, or run commands on your sync server. Local AD values can overwrite
+cloud changes once synchronization resumes.
+
+Console example after checking prerequisites:
+
+```powershell
+.\Convert-EntraUserToCloud.ps1 -Action Restore -Users 'user@contoso.com' -NoGui -RestorePrerequisitesConfirmed
+```
+
+Use `-Action Restore -WhatIf` for a read-only eligibility check. Protection blocks
+remain visible in preview. The existing GitHub one-liner opens both options.
 
 The same user object is retained. The script makes no password changes; verify
 sign-in separately, especially if authentication still depends on federation or
