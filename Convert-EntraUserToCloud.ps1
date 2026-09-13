@@ -20,11 +20,112 @@ param(
     [switch]$UseDeviceCode,
     [ValidateRange(1, 20)][int]$VerificationAttempts = 6,
     [ValidateRange(1, 30)][int]$VerificationDelaySeconds = 2,
-    [switch]$PassThru
+    [switch]$PassThru,
+    [switch]$NoGui
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $Users) {
+$showDialogs = -not $NoGui
+
+function New-CloudDialog {
+    param([string]$Title, [string]$Heading, [string]$Description, [string]$ButtonText, [switch]$ReadOnly)
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = $Title
+    $form.ClientSize = New-Object System.Drawing.Size(720, 500)
+    $form.MinimumSize = New-Object System.Drawing.Size(600, 440)
+    $form.StartPosition = 'CenterScreen'
+    $form.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+    $form.BackColor = [System.Drawing.Color]::White
+    $form.TopMost = $true
+    $headingLabel = New-Object System.Windows.Forms.Label
+    $headingLabel.SetBounds(24, 20, 672, 32)
+    $headingLabel.Anchor = 'Top, Left, Right'
+    $headingLabel.Font = New-Object System.Drawing.Font('Segoe UI', 15, [System.Drawing.FontStyle]::Bold)
+    $headingLabel.Text = $Heading
+    $descriptionLabel = New-Object System.Windows.Forms.Label
+    $descriptionLabel.SetBounds(24, 62, 672, 62)
+    $descriptionLabel.Anchor = 'Top, Left, Right'
+    $descriptionLabel.Text = $Description
+    $box = New-Object System.Windows.Forms.TextBox
+    $box.SetBounds(24, 132, 672, 292)
+    $box.Anchor = 'Top, Bottom, Left, Right'
+    $box.Multiline = $true
+    $box.AcceptsReturn = $true
+    $box.ScrollBars = 'Vertical'
+    $box.ReadOnly = [bool]$ReadOnly
+    $box.MaxLength = 0
+    $box.Font = New-Object System.Drawing.Font('Consolas', 10)
+    $box.BackColor = [System.Drawing.Color]::FromArgb(247, 249, 252)
+    $button = New-Object System.Windows.Forms.Button
+    $button.SetBounds(576, 446, 120, 34)
+    $button.Anchor = 'Bottom, Right'
+    $button.Text = $ButtonText
+    $button.DialogResult = 'OK'
+    $form.Controls.AddRange(@($headingLabel, $descriptionLabel, $box, $button))
+    # Enter stays a newline in the email box; only clicking Start starts the run.
+    [pscustomobject]@{ Form = $form; Box = $box; Button = $button; Heading = $headingLabel }
+}
+
+function Show-CloudInput {
+    $dialog = New-CloudDialog -Title 'Entra Cloud Conversion' -Heading 'Paste emails to convert' -Description "Paste one email or a list below (one per line, commas or spaces).`r`nClick Start, then sign in when asked. Passwords stay unchanged." -ButtonText 'Start'
+    $dialog.Button.Enabled = $false
+    $inputBox = $dialog.Box
+    $startButton = $dialog.Button
+    $inputBox.Add_TextChanged({ $startButton.Enabled = -not [string]::IsNullOrWhiteSpace($inputBox.Text) }.GetNewClosure())
+    $cancel = New-Object System.Windows.Forms.Button
+    $cancel.Text = 'Cancel'
+    $cancel.SetBounds(444, 446, 120, 34)
+    $cancel.Anchor = 'Bottom, Right'
+    $cancel.DialogResult = 'Cancel'
+    $dialog.Form.CancelButton = $cancel
+    $dialog.Form.Controls.Add($cancel)
+    try {
+        if ($dialog.Form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $dialog.Box.Text }
+        return $null
+    } finally { $dialog.Form.Dispose() }
+}
+
+function Show-CloudSummary {
+    param([object[]]$Rows, [string]$FatalError)
+    if ($FatalError) {
+        $heading = 'Unable to complete the run'
+        $description = 'The run stopped. Review the error below and try again.'
+        $detail = $FatalError
+        $color = [System.Drawing.Color]::Firebrick
+    } else {
+        $success = @($Rows | Where-Object Status -eq 'Success').Count
+        $failed = @($Rows | Where-Object Status -eq 'Failed').Count
+        $unverified = @($Rows | Where-Object Status -eq 'Unverified').Count
+        $skipped = @($Rows | Where-Object Status -eq 'Skipped').Count
+        $preview = @($Rows | Where-Object Status -eq 'Preview').Count
+        $heading = 'Conversion completed successfully'
+        $color = [System.Drawing.Color]::DarkGreen
+        if ($failed + $unverified -gt 0) { $heading = 'Completed - some accounts need attention'; $color = [System.Drawing.Color]::Firebrick }
+        elseif ($preview -gt 0) { $heading = 'Preview complete - no accounts changed'; $color = [System.Drawing.Color]::SteelBlue }
+        elseif ($success -eq 0) { $heading = 'Complete - no accounts changed'; $color = [System.Drawing.Color]::SteelBlue }
+        $description = "Converted: $success   |   Skipped: $skipped   |   Preview: $preview`r`nFailed: $failed   |   Unverified: $unverified   |   Total: $($Rows.Count)"
+        $detail = (@($Rows | ForEach-Object {
+            "[$($_.Status)] $($_.Input)`r`nResolved UPN: $($_.UPN)`r`n$($_.Detail)"
+        }) -join "`r`n`r`n")
+    }
+    $dialog = New-CloudDialog -Title 'Entra Cloud Conversion - Results' -Heading $heading -Description $description -ButtonText 'Close' -ReadOnly
+    $dialog.Heading.ForeColor = $color
+    $dialog.Box.Text = $detail
+    $dialog.Form.AcceptButton = $dialog.Button
+    $dialog.Form.CancelButton = $dialog.Button
+    try { $null = $dialog.Form.ShowDialog() } finally { $dialog.Form.Dispose() }
+}
+
+try {
+if ($showDialogs) {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    [System.Windows.Forms.Application]::EnableVisualStyles()
+}
+if (-not $Users -and $showDialogs) {
+    $Users = Show-CloudInput
+    if (-not $Users) { Write-Host 'Cancelled. No accounts changed.'; return }
+} elseif (-not $Users) {
     Write-Host 'Paste emails/UPNs (one per line, or separated by spaces, commas or semicolons).'
     Write-Host 'Press Enter on an empty line to start.'
     $lines = @()
@@ -60,7 +161,10 @@ Write-Host ("Connected: {0} | Tenant: {1}" -f $context.Account, $context.TenantI
 
 $base = 'https://graph.microsoft.com/v1.0'
 $seenIds = @{}
+$processed = 0
 $results = foreach ($inputAddress in $inputs) {
+    $processed++
+    Write-Progress -Activity 'Converting users to cloud management' -Status "$processed of $($inputs.Count): $inputAddress" -PercentComplete (($processed / $inputs.Count) * 100)
     $row = [ordered]@{ Input = $inputAddress; UPN = ''; UserId = ''; Status = 'Failed'; Detail = '' }
     $patchAttempted = $false
     try {
@@ -134,4 +238,14 @@ $counts = foreach ($status in @('Success', 'Skipped', 'Preview', 'Failed', 'Unve
     '{0}: {1}' -f $status, @($results | Where-Object Status -eq $status).Count
 }
 Write-Host ($counts -join ' | ')
+Write-Progress -Activity 'Converting users to cloud management' -Completed
+if ($showDialogs) { Show-CloudSummary -Rows @($results) }
 if ($PassThru) { $results }
+} catch {
+    if ($showDialogs -and ('System.Windows.Forms.Form' -as [type])) {
+        Show-CloudSummary -FatalError $_.Exception.Message
+    }
+    throw
+} finally {
+    Write-Progress -Activity 'Converting users to cloud management' -Completed
+}
