@@ -1,5 +1,9 @@
 # Entra Cloud Conversion
 
+Paste one email or a list into the popup, click **Start**, and sign in to Microsoft
+Graph. A result window shows what happened to each account, with totals for
+successful conversions, skipped accounts, failures and unverified outcomes.
+
 `Convert-EntraUserToCloud.ps1` transfers single or multiple synced users using
 `PATCH https://graph.microsoft.com/v1.0/users/{id}/onPremisesSyncBehavior`
 with only `{"isCloudManaged":true}`. It does not reset passwords, clear immutable
@@ -22,13 +26,29 @@ Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Repository PSG
 
 ## Run
 
+**Open the popup directly from GitHub:**
+
+```powershell
+& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/xnostra/Entra-Cloud-Conversion/main/Convert-EntraUserToCloud.ps1')))
+```
+
+1. Paste one email or multiple emails into the large box. Use one per line,
+   spaces, commas or semicolons.
+2. Click **Start**. **Cancel**, Escape, or closing the input window exits without changes.
+3. Sign in when prompted. Progress appears in PowerShell while accounts are processed.
+4. Read the results popup. It lists every account and its outcome. Text can be
+   selected and copied for your records; click **Close** when finished.
+
+The Start button remains disabled for empty input. A failed connection or missing
+module also opens an error popup. Install the module above before the first run.
+
 Single user (applies the transfer):
 
 ```powershell
 .\Convert-EntraUserToCloud.ps1 -Users 'user@contoso.com'
 ```
 
-Paste any number of addresses when prompted; finish with an empty line:
+Open the same popup from a downloaded copy:
 
 ```powershell
 .\Convert-EntraUserToCloud.ps1
@@ -57,13 +77,19 @@ object IDs are processed once. One user's error does not stop other users.
 
 Optional: `-TenantId 'your-tenant-guid'` targets a tenant; `-UseDeviceCode` uses
 device login; `-PassThru` returns result objects for export or automation.
+`-NoGui` disables popups for console use; when no `-Users` is supplied in that mode,
+paste addresses into the console and finish with an empty line.
+
+The popup requires a Windows desktop session. Use Windows PowerShell or PowerShell
+7 on Windows in STA mode (their normal Windows console default). If your host uses
+MTA, start `powershell.exe -STA` or `pwsh.exe -STA`, then paste the command there.
 
 ## GitHub one-liner
 
 Run directly from this repository. The one-liners use the latest version on `main`.
 For a fixed version, replace `main` in the URL with a reviewed commit SHA.
 
-Download and run, then paste one or several addresses at the prompt:
+Download and run, then paste one or several addresses into the popup and click **Start**:
 
 ```powershell
 & ([scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/xnostra/Entra-Cloud-Conversion/main/Convert-EntraUserToCloud.ps1')))
@@ -104,6 +130,3 @@ do not rely solely on the portal's sync label.
 
 - [Configure user SOA, prerequisites and v1.0 transfer API](https://learn.microsoft.com/en-us/entra/identity/hybrid/how-to-user-source-of-authority-configure)
 - [Graph user list and permissions](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0)
-
-Validated locally with simulated Graph responses; no live tenant transfer was
-performed while preparing this script.
